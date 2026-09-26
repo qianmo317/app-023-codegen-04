@@ -123,7 +123,7 @@ describe('lookahead 调度器（mock ctx）', () => {
     const total = totalTicks(score.bars);
     const events = computeEvents(score.bars, score.bpm, false, score.instruments, 0, total, ctx.currentTime + 0.06);
     const master = ctx.createGain();
-    const handle = scheduleEvents(ctx, master, score, events);
+    const handle = scheduleEvents(ctx, master, score.instruments, events);
     const first = handle.scheduled().length;
     expect(first).toBeGreaterThan(0);
     expect(first).toBeLessThan(events.length); // 未全部排入（lookahead 窗口）

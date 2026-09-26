@@ -211,11 +211,11 @@ const TIMER_MS = 25; // 轮询间隔（只负责填窗口，不负责发声时�
 export function scheduleEvents(
   ctx: AudioContext,
   master: AudioNode,
-  score: Score,
+  instruments: Instrument[],
   events: ScheduleEvent[],
   onVisual?: (ev: ScheduleEvent) => void,
 ): SchedulerHandle {
-  const instMap = new Map(score.instruments.map((i) => [i.id, i]));
+  const instMap = new Map(instruments.map((i) => [i.id, i]));
   let idx = 0;
   const done: ScheduleEvent[] = [];
   let stopped = false;
@@ -262,5 +262,5 @@ export function playRange(
     loopCount > 1
       ? computeLoopEvents(score, fromTick, toTick, startAt, loopCount)
       : computeEvents(score.bars, score.bpm, score.freeMeter, score.instruments, fromTick, toTick, startAt);
-  return scheduleEvents(ctx, master, score, events, onVisual);
+  return scheduleEvents(ctx, master, score.instruments, events, onVisual);
 }

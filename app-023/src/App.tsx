@@ -1,10 +1,13 @@
 // 极简 hash 路由：/ 曲目列表 · /score/:id 编辑器 · /score/:id/print 打印 · /library 曲牌库 · /settings 设置
+// · /programs 整台列表 · /program/:id 整台编排
 import { useEffect, useState, type ReactNode } from 'react';
 import { ScoreList } from './pages/ScoreList';
 import { Editor } from './pages/Editor';
 import { Print } from './pages/Print';
 import { Library } from './pages/Library';
 import { Settings } from './pages/Settings';
+import { ProgramList } from './pages/ProgramList';
+import { ProgramEditor } from './pages/ProgramEditor';
 import { SettingsProvider } from './settingsContext';
 
 function parseHash(): { page: string; id?: string } {
@@ -13,6 +16,9 @@ function parseHash(): { page: string; id?: string } {
   if (m) return { page: 'print', id: decodeURIComponent(m[1]) };
   m = h.match(/^\/score\/([^/]+)$/);
   if (m) return { page: 'editor', id: decodeURIComponent(m[1]) };
+  m = h.match(/^\/program\/([^/]+)$/);
+  if (m) return { page: 'program-editor', id: decodeURIComponent(m[1]) };
+  if (h.startsWith('/programs')) return { page: 'programs' };
   if (h.startsWith('/library')) return { page: 'library' };
   if (h.startsWith('/settings')) return { page: 'settings' };
   return { page: 'list' };
@@ -29,6 +35,7 @@ function Nav() {
     <nav className="top-nav">
       <span className="brand">锣鼓经记谱</span>
       {item('#/', '曲目', 'nav-list')}
+      {item('#/programs', '排台', 'nav-programs')}
       {item('#/library', '曲牌库', 'nav-library')}
       {item('#/settings', '设置', 'nav-settings')}
     </nav>
@@ -55,6 +62,9 @@ export function App() {
   let content: ReactNode;
   if (route.page === 'editor') content = <Editor scoreId={route.id!} onNavigate={(h) => (window.location.hash = h)} />;
   else if (route.page === 'print') content = <Print scoreId={route.id!} />;
+  else if (route.page === 'program-editor')
+    content = <ProgramEditor programId={route.id!} onNavigate={(h) => (window.location.hash = h)} />;
+  else if (route.page === 'programs') content = <ProgramList />;
   else if (route.page === 'library') content = <Library />;
   else if (route.page === 'settings') content = <Settings />;
   else content = <ScoreList />;

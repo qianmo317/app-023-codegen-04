@@ -41,8 +41,18 @@
 #/score/:id           编辑器：顶栏（标题/流派/拍号/散板/±小节/出谱打印）+ 左乐器面板 + 中时值条与 SVG 谱面 + 下试听控制台
 #/score/:id/print     打印视图：A4 横向、简谱对照开关、打印/导出 PDF、导出 PNG（不套顶部导航）
 #/library             曲牌库：6 张骨架卡（载入并编辑）+ 拟音字表（音色/基频/衰减）
+#/programs            整台列表：新建一台 / 进入编排 / 删除（不影响各段曲目）
+#/program/:id         整台编排：左曲目库选段、中编排序列（上移下移/抽掉放回/移出）与整台时间轴（段小节号、起止秒、总时长）
 #/settings            设置：试听（高亮开关、散板伸缩）、键盘映射、乐器音色表
 ```
+
+### 整台编排（节目拼接）
+一台锣鼓由若干已存在的曲目（段）按序拼成，核心规则在 `src/lib/program.ts`：
+- **接头**：相邻段拍号不同 → 中间补恰好 1 个过渡小节；过渡小节按**后段拍号**凑满整小节（后段从自身强拍整齐进入），只留后段首小节**强拍（第 1 拍）上的字**，其余各拍整拍休止；速度随后段。拍号相同直接相接。
+- **多速度计时**：每块（段/过渡）用各自 bpm 的每格秒数独立换算、块间累加秒数（无块内浮点递推）；一次算出每段起止时间、占多少小节、整台第几到第几小节（过渡占全局小节号但不计入段范围）与总时长。任何调序/抽放都重跑纯函数 `buildProgramTimeline`。
+- **抽段/放回**：`included=false` 临时抽掉（保留行与顺序，不参与计时与接头），随时放回；调序对抽掉段同样生效。
+- **生成试听与退回**：「整台生成试听」冻结编排进入预览，`useProgramAudio` 在同一 AudioContext 上按 `computeProgramEvents` 多速度调度整台；「退回编排前」用进入页时存的深拷贝快照整体恢复（默认空台子）。
+- 整台存 IndexedDB `programs` 仓（DB v2，仅段引用 + 加入时快照；源曲目删除则该段标 `missing` 占位、禁试听）。
 
 ## 7. 数据模型
 ```ts
@@ -64,10 +74,21 @@ type AppSettings = { keyMap: KeyBinding[]; durationKeys: Record<string, number>;
 type ScheduleEvent = { time: number; barIndex: number; offset: number; instrumentId: string;
                        hit: Hit; glyph: string; durationTicks: number };
 
+// 整台：Program.items 为有序段引用；buildProgramTimeline 产出 blocks(段|过渡)/segments(段时间与小节号)
+type ProgramItem = { key: string; scoreId: string; title: string; bpm: number;
+                     beatsPerBar: number; bars: number; included: boolean };
+type Program     = { id: string; title: string; items: ProgramItem[]; updatedAt: number };
+type ProgramBlock = { kind: 'segment'|'transition'; itemKey: string; title: string; bars: Bar[];
+                      bpm: number; barCount: number; fromBar: number; toBar: number;
+                      startS: number; endS: number; durationS: number; joint?: {from:number;to:number} };
+type SegmentTiming = { key: string; title: string; bpm: number; beatsPerBar: number; ownBars: number;
+                       fromBar: number; toBar: number; startS: number; endS: number; durationS: number;
+                       missing: boolean; transitionBefore: boolean };
+
 const TICKS_PER_BEAT = 4;
 const VELOCITY_GAIN: Record<Hit['velocity'], number> = { 1: 0.4, 2: 0.7, 3: 1.0 };
 ```
-IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索引 `updatedAt`）与 `settings`（keyPath `id`，固定 `'app'`）。
+IndexedDB 库名 `app023-percussion`（v2），对象仓 `scores`（keyPath `id`，索引 `updatedAt`）、`programs`（同构）与 `settings`（keyPath `id`，固定 `'app'`）。
 
 ## 8. 关键算法（关键实现点）
 - **整数格时间系统**：全项目唯一时间单位是格，`barTicks(beatsPerBar) = beatsPerBar × 4`；时值表 `DURATIONS` = 整拍 4 / 半拍 2 / ¼ 拍 1 / 附点 6 / 附点半拍 3；切分不单设类型，由格位组合表达（如 1+2+1）。小节不变式：`steps` 各 `beats` 之和 === `barTicks`，由 `isBarFull` 判定（`src/lib/grid.ts`）。
@@ -90,7 +111,12 @@ IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索�
 - 窄屏（≤760px）编辑区改为纵向，乐器面板横向滚动，隐藏面板标题与提示。
 
 ## 10. 验收标准
-- 单元测试 58 例全绿：`tests/grid.test.ts` 26 例、`tests/glyphs.test.ts` 18 例、`tests/scheduler.test.ts` 9 例、`tests/storage.test.ts` 5 例。
+- 单元测试 82 例全绿：`tests/grid.test.ts` 26 例、`tests/glyphs.test.ts` 18 例、`tests/scheduler.test.ts` 9 例、`tests/program.test.ts` 22 例、`tests/storage.test.ts` 7 例。
+- 整台接头：2/4 段接 4/4 段时中间恰补 1 个过渡小节（4/4 凑满、只留强拍字其余整拍休止），全局小节号连续；同拍号不补；过渡随后段 bpm 计时。
+- 整台时间：每段起止秒数 = 前段累计 + 本段绝对格 × 本段每格秒数（独立重算、无块内递推）；调序/抽放后经 `buildProgramTimeline` 整体重算；段表给出每段小节数与整台起止小节号、整台总时长。
+- 整台试听：`computeProgramEvents` 事件时刻单调不减，过渡强拍齐奏多字同刻；E2E 经 `window.__programScheduled` 断言已排事件 >5 且有序。
+- 退回：进入编排页（空台子）→ 加两段生成试听 → 「退回编排前」后段数归 0、回到编辑态。
+- E2E 19 例：原 13 例 + `e2e/program.spec.ts` 6 例（选段建台/接头/同拍号/抽放调序重算/生成试听退回/持久化/列表删除）。
 - 时值换算：整拍 4 / 半拍 2 / ¼ 拍 1 / 附点 6 / 附点半拍 3；4/4 = 16 格、2/4 = 8 格、3/4 = 12 格；不满小节被校验判为错误。
 - 调度精度：BPM 120 连续 240 拍，每击时刻与「整数格 × 固定每格秒数」的独立重算结果完全一致，相邻间隔偏差 < 1e-9s（验收线 10ms），末击无累积漂移。
 - 齐奏：同一步内鼓、大锣、钹三击的时间集合大小 = 1，完全同刻而非近似。

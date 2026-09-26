@@ -28,7 +28,7 @@
 | 构建 | Vite 5 | `base: './'`，相对路径部署 |
 | 路由 | 自研 hash 路由（[App.tsx](src/App.tsx)） | `#/` 前缀，约 30 行解析，无 react-router |
 | 状态 | 局部 useState + [settingsContext](src/settingsContext.tsx) | 播放状态集中 [useAudio](src/hooks/useAudio.ts) |
-| 存储 | IndexedDB（[storage.ts](src/lib/storage.ts)） | 库 `app023-percussion`，仓 `scores` / `settings` |
+| 存储 | IndexedDB（[storage.ts](src/lib/storage.ts)） | 库 `app023-percussion`（v2），仓 `scores` / `programs` / `settings` |
 | 音频 | Web Audio 原生（[audio.ts](src/lib/audio.ts)） | 无采样文件，全合成 |
 | 测试 | Vitest（jsdom + fake-indexeddb）+ Playwright | 见 §6 |
 
@@ -41,7 +41,7 @@ cd app-023
 npm install
 npm run dev        # 开发服务器（默认 5173）
 npm run build      # tsc -b && vite build（含类型检查）
-npm test           # 单元测试（58 个用例）
+npm test           # 单元测试（82 个用例）
 npm run e2e        # Playwright E2E（13 个用例，自动起 4174 preview）
 ```
 
@@ -80,10 +80,13 @@ npm run e2e        # Playwright E2E（13 个用例，自动起 4174 preview）
 | [lib/audio.ts](src/lib/audio.ts) | 合成音（drum/metal/wood）、lookahead 调度器、事件展开 | `computeEvents` `computeLoopEvents` `scheduleEvents` `playRange` |
 | [lib/storage.ts](src/lib/storage.ts) | IndexedDB CRUD（scores/settings） | `listScores` `getScore` `saveScore` `deleteScore` |
 | [lib/factory.ts](src/lib/factory.ts) | JSON 默认数据 → 对象、曲牌 → Score 转换（跨小节自动切分补休止） | `scoreFromPattern` `newEmptyScore` `emptyBar` |
+| [lib/program.ts](src/lib/program.ts) | 整台编排：接头过渡小节（拍数不同补一小节、只留强拍字其余休止）、多速度时间轴、段起止时间/小节号、抽段重排退回 | `buildProgramTimeline` `buildTransitionBar` `computeProgramEvents` `addSegment` `moveItem` |
 | [hooks/useAudio.ts](src/hooks/useAudio.ts) | 播放状态集中管理：ctx/调度/循环/高亮/独奏静音 | `useAudio(score)` |
+| [hooks/useProgramAudio.ts](src/hooks/useProgramAudio.ts) | 整台多速度播放（逐块 bpm 调度同一 AudioContext） | `useProgramAudio(timeline, instruments)` |
 | [components/ScoreGrid.tsx](src/components/ScoreGrid.tsx) | SVG 谱面：时间×乐器网格、时值线、tie 延伸、齐奏同列、选中光标、高亮列 | `<ScoreGrid>` |
 | [components/Transport.tsx](src/components/Transport.tsx) | 试听控制台：播放/BPM/循环/高亮开关 | `<Transport>` |
-| [pages/*](src/pages) | ScoreList / Editor / Print / Library / Settings 五个页面 | — |
+| [components/ProgramPreview.tsx](src/components/ProgramPreview.tsx) | 整台生成预览：逐块（段/过渡）谱面、整台小节号与速度标注、播放高亮 | `<ProgramPreview>` |
+| [pages/*](src/pages) | ScoreList / Editor / Print / Library / Settings / ProgramList / ProgramEditor 七个页面 | — |
 
 ## 4. 核心概念
 
@@ -115,6 +118,16 @@ npm run e2e        # Playwright E2E（13 个用例，自动起 4174 preview）
 ### 4.4 散板（freeMeter）
 
 不画严格拍格、时值线为相对宽度；播放按「等格时长 × `currentBeatStretch`」近似，UI 明确标注为近似。
+
+### 4.5 整台编排（program）
+
+一台锣鼓由若干段（已有曲目）拼成，路由 `#/programs` 列表、`#/program/:id` 编排：
+
+- **接头**：相邻两段拍号（`beatsPerBar`）不同时，中间补恰好 **1 个过渡小节**。过渡小节按**后段拍号**凑满整小节（让后段从自己的强拍整齐进入），只保留后段首小节**强拍（第 1 拍）上的字**，其余各拍补整拍休止；速度随后段。拍号相同则直接相接、不补。见 `buildTransitionBar`。
+- **多速度时间轴**：每块（段/过渡）用各自 bpm 的 `tickSeconds` 独立换算，块间只累加秒数；`buildProgramTimeline` 一次算出每块起止秒数、每段「占多少小节、从第几小节到第几小节」（过渡占全局小节号但不计入段范围）与整台总时长。任何抽段/放回/调序都重跑这个纯函数，时间自动跟着变。
+- **抽段与放回**：`ProgramItem.included=false` 表示临时抽掉——保留行与顺序、不参与时间轴和接头；放回即恢复。调序 `moveItem` 不区分是否抽掉。
+- **生成试听与退回**：点「整台生成试听」进入冻结预览（编排不可改），`useProgramAudio` 用同一 `AudioContext` 按 `computeProgramEvents` 多速度调度播放整台；「退回编排前」用进入编排页时存的 `snapshotProgram` 深拷贝快照（默认即空台子）经 `restoreProgram` 整体覆盖。
+- 整台存 IndexedDB `programs` 仓（只存段引用与加入时快照，不复制谱面；源曲目删除则该段标 `missing` 占位、禁止试听）。
 
 ## 5. 常见开发任务
 
@@ -160,8 +173,10 @@ npm run e2e        # Playwright E2E（13 个用例，自动起 4174 preview）
 tests/grid.test.ts      26 用例：时值换算、切分偏移、拆格、宽度一致、曲牌结构
 tests/glyphs.test.ts    18 用例：反查、技法区分、键位解析、防串乐器、冲突抛错
 tests/scheduler.test.ts  9 用例：漂移(<1e-9s)、齐奏同刻、循环相位、散板伸缩、lookahead 行为
-tests/storage.test.ts    5 用例：CRUD、排序、覆盖更新、设置往返（fake-indexeddb）
+tests/program.test.ts   22 用例：过渡小节构造、多速度时间轴/起止秒数、抽段重排退回、多速度事件
+tests/storage.test.ts    7 用例：CRUD、排序、覆盖更新、设置往返、整台 programs 仓（fake-indexeddb）
 e2e/app.spec.ts         13 用例：真实点击全链路（见 6.3）
+e2e/program.spec.ts      6 用例：选段建台/接头/时间重算/抽放/生成试听/退回/持久化
 ```
 
 ### 6.2 约定

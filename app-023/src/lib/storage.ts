@@ -1,10 +1,11 @@
-// 曲目与设置持久化 —— IndexedDB，刷新后不丢
-import type { AppSettings, Score } from '../types';
+// 曲目、整台编排与设置持久化 —— IndexedDB，刷新后不丢
+import type { AppSettings, Program, Score } from '../types';
 
 const DB_NAME = 'app023-percussion';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_SCORES = 'scores';
 const STORE_SETTINGS = 'settings';
+const STORE_PROGRAMS = 'programs';
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -17,6 +18,10 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
         db.createObjectStore(STORE_SETTINGS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_PROGRAMS)) {
+        const store = db.createObjectStore(STORE_PROGRAMS, { keyPath: 'id' });
+        store.createIndex('updatedAt', 'updatedAt');
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -69,6 +74,25 @@ export async function loadSettings(): Promise<AppSettings | undefined> {
   return settings;
 }
 
-export function newId(): string {
-  return `sc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+export function newId(prefix = 'sc'): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// ---------- 整台编排 ----------
+
+export async function listPrograms(): Promise<Program[]> {
+  const all = await tx<Program[]>(STORE_PROGRAMS, 'readonly', (s) => s.getAll() as IDBRequest<Program[]>);
+  return all.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function getProgram(id: string): Promise<Program | undefined> {
+  return tx<Program | undefined>(STORE_PROGRAMS, 'readonly', (s) => s.get(id) as IDBRequest<Program | undefined>);
+}
+
+export async function saveProgram(program: Program): Promise<void> {
+  await tx(STORE_PROGRAMS, 'readwrite', (s) => s.put(program));
+}
+
+export async function deleteProgram(id: string): Promise<void> {
+  await tx(STORE_PROGRAMS, 'readwrite', (s) => s.delete(id));
 }
