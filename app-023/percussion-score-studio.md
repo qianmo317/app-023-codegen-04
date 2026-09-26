@@ -24,6 +24,7 @@
 4. **试听**：Web Audio 原生合成，三种配方 `drum` / `metal` / `wood`；lookahead 调度（25ms 轮询、0.12s 预排窗口），BPM 可调 30–240。
 5. **曲牌库**：6 个内置骨架一键载入再改；跨小节条目自动切分（前段 `tie` 连打、后段转空步），末尾不足自动补休止（`src/lib/factory.ts`）。
 6. **持久化与出谱**：IndexedDB 保存曲目与设置（400ms 防抖自动保存）；打印视图 A4 横向，可切换简谱对照行，`window.print()` 出 PDF，另可导出 2 倍分辨率 PNG。
+7. **排台**：把选中的几段按顺序接成一台节目。两段拍数不一样时接缝自动补一小节过渡（用下一段的拍号与速度，只留强拍/次强拍的字，其余补休止）；末小节不满先补休止凑满。每段按各自 BPM 算出在整台中的起止时间与第几小节到第几小节，合成总时长。可上移/下移调顺序、临时抽掉一段再放回原位，位置一变时间线立即重算。「生成整台试听」把整台合成一张谱（每小节带本段 bpm）在内存中播放，听完「退回」即丢弃，不动各段原谱（`src/lib/medley.ts`、`src/pages/Medley.tsx`）。
 
 ## 5. 进阶功能
 - 独奏/静音按钮（每件乐器一组，当前只作用于播放高亮，见 §11）。
@@ -41,6 +42,7 @@
 #/score/:id           编辑器：顶栏（标题/流派/拍号/散板/±小节/出谱打印）+ 左乐器面板 + 中时值条与 SVG 谱面 + 下试听控制台
 #/score/:id/print     打印视图：A4 横向、简谱对照开关、打印/导出 PDF、导出 PNG（不套顶部导航）
 #/library             曲牌库：6 张骨架卡（载入并编辑）+ 拟音字表（音色/基频/衰减）
+#/medley              排台：备选段池 + 当前一台（顺序/拍号/BPM/小节/起止小节/起止时间 + 上移/下移/抽掉）+ 已抽掉（放回）+ 生成整台试听/退回
 #/settings            设置：试听（高亮开关、散板伸缩）、键盘映射、乐器音色表
 ```
 
@@ -54,9 +56,12 @@ type Instrument = { id: string; name: string; glyphs: string[]; color?: string;
                     techMap?: Record<string, Tech[]> };
 type Hit  = { instrumentId: string; velocity: 1 | 2 | 3; glyph?: string; tech?: Tech[] };
 type Step = { beats: number; hits: Hit[]; tie?: boolean; rest?: boolean };  // beats = 格数
-type Bar  = { index: number; beatsPerBar: number; steps: Step[]; tempoNote?: string };
+type Bar  = { index: number; beatsPerBar: number; steps: Step[]; tempoNote?: string;
+              bpm?: number };  // bpm：排台合成后该小节自带速度，缺省用 Score.bpm
 type Score = { id: string; title: string; style?: string; bpm: number; bars: Bar[];
                instruments: Instrument[]; freeMeter: boolean; updatedAt: number };
+type Medley = { id: string; title: string; items: string[];
+                removed: { scoreId: string; index: number }[]; updatedAt: number };
 
 type KeyBinding  = { key: string; instrumentId: string; glyphIndex: number };
 type AppSettings = { keyMap: KeyBinding[]; durationKeys: Record<string, number>;
@@ -67,7 +72,7 @@ type ScheduleEvent = { time: number; barIndex: number; offset: number; instrumen
 const TICKS_PER_BEAT = 4;
 const VELOCITY_GAIN: Record<Hit['velocity'], number> = { 1: 0.4, 2: 0.7, 3: 1.0 };
 ```
-IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索引 `updatedAt`）与 `settings`（keyPath `id`，固定 `'app'`）。
+IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索引 `updatedAt`）与 `settings`（keyPath `id`，固定 `'app'`；排台记录也存此仓，id 固定 `'current'`）。
 
 ## 8. 关键算法（关键实现点）
 - **整数格时间系统**：全项目唯一时间单位是格，`barTicks(beatsPerBar) = beatsPerBar × 4`；时值表 `DURATIONS` = 整拍 4 / 半拍 2 / ¼ 拍 1 / 附点 6 / 附点半拍 3；切分不单设类型，由格位组合表达（如 1+2+1）。小节不变式：`steps` 各 `beats` 之和 === `barTicks`，由 `isBarFull` 判定（`src/lib/grid.ts`）。
@@ -78,6 +83,7 @@ IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索�
 - **合成音三配方**：鼓 = 低频正弦下滑 + 短噪声；锣/钹 = 带通噪声 + 1 / 1.47 / 2.13 倍三个失谐三角波泛音；木 = 高通噪声 + 三角波 blip；闷击把衰减压到 0.3 倍，双打延后 30ms 补一击，滚奏按 55ms 间隔补击（`src/lib/audio.ts`）。
 - **曲牌骨架转换**：`[拟音字数组, 格数][]` 逐条落格，跨小节自动切成「前段 tie 连打 + 后段转空步」，末尾不足补 `rest`，条目用未知拟音字则抛错（`src/lib/factory.ts`）。
 - **谱面布局**：小节按 `barsPerRow` 分行，一行系统高 = 小节号 16 + 乐器数 × 行高 + 14 + 简谱行高；时值线长度 = `beats × pxPerTick`，`tieLine` 向后合并连续 tie 的宽度（`src/components/ScoreGrid.tsx`、`src/lib/grid.ts`）。
+- **排台接缝与时间线**：`transitionBar` 以下一段首小节为模板，只保留强拍（4 拍含次强拍第 3 拍）上的 hits，其余 step 转 `rest`；`composeMedley` 顺接各段并给每小节打上本段 `bpm`，拍号变化处插一小节过渡；`computeMedleyTimeline` 与合成共用同一套接缝规则，逐段以「总格数 × 每格秒数」算出起止秒与起止小节号。`computeEvents` 对小节级 `bpm` 走「前缀小节时长和 + 小节内偏移 × 本小节每格秒数」路径，无小节级 `bpm` 时保持原「绝对格 × 固定秒/格」路径逐比特不变（`src/lib/medley.ts`、`src/lib/audio.ts`）。
 - **打印字号自适应**：按 A4 横排内容宽 1047px、目标每行最多 16 小节反算 `pxPerTick`，夹在 6–14 之间（`src/pages/Print.tsx`）。
 - **自动保存**：谱面变更后 400ms 防抖写 IndexedDB，并回显「已保存 HH:MM」（`src/pages/Editor.tsx`）。
 
@@ -90,7 +96,7 @@ IndexedDB 库名 `app023-percussion`，对象仓 `scores`（keyPath `id`，索�
 - 窄屏（≤760px）编辑区改为纵向，乐器面板横向滚动，隐藏面板标题与提示。
 
 ## 10. 验收标准
-- 单元测试 58 例全绿：`tests/grid.test.ts` 26 例、`tests/glyphs.test.ts` 18 例、`tests/scheduler.test.ts` 9 例、`tests/storage.test.ts` 5 例。
+- 单元测试 77 例全绿：`tests/grid.test.ts` 26 例、`tests/glyphs.test.ts` 18 例、`tests/scheduler.test.ts` 9 例、`tests/storage.test.ts` 5 例、`tests/medley.test.ts` 17 例、`tests/medley-ui.test.tsx` 2 例。
 - 时值换算：整拍 4 / 半拍 2 / ¼ 拍 1 / 附点 6 / 附点半拍 3；4/4 = 16 格、2/4 = 8 格、3/4 = 12 格；不满小节被校验判为错误。
 - 调度精度：BPM 120 连续 240 拍，每击时刻与「整数格 × 固定每格秒数」的独立重算结果完全一致，相邻间隔偏差 < 1e-9s（验收线 10ms），末击无累积漂移。
 - 齐奏：同一步内鼓、大锣、钹三击的时间集合大小 = 1，完全同刻而非近似。

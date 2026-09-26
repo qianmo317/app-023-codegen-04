@@ -39,6 +39,7 @@ export interface Bar {
   beatsPerBar: number; // 每小节拍数（散板仍给默认 4）
   steps: Step[];
   tempoNote?: string; // 渐快/渐慢等文字标记
+  bpm?: number; // 该小节自带速度（排台合成后各段速度不同）；缺省用 Score.bpm
 }
 
 export interface Score {
@@ -49,6 +50,15 @@ export interface Score {
   bars: Bar[];
   instruments: Instrument[];
   freeMeter: boolean; // 散板
+  updatedAt: number;
+}
+
+/** 一台节目（排台）：把若干段按顺序接成一台 */
+export interface Medley {
+  id: string; // 固定 'current'：一次只排一台
+  title: string;
+  items: string[]; // 顺序排列的 scoreId
+  removed: { scoreId: string; index: number }[]; // 临时抽掉的段及其原位置（可放回）
   updatedAt: number;
 }
 

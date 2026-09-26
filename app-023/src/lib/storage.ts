@@ -1,5 +1,5 @@
 // 曲目与设置持久化 —— IndexedDB，刷新后不丢
-import type { AppSettings, Score } from '../types';
+import type { AppSettings, Medley, Score } from '../types';
 
 const DB_NAME = 'app023-percussion';
 const DB_VERSION = 1;
@@ -67,6 +67,17 @@ export async function loadSettings(): Promise<AppSettings | undefined> {
   if (!rec) return undefined;
   const { id: _id, ...settings } = rec;
   return settings;
+}
+
+/** 排台记录存在 settings 仓（id 固定 'current'），与 'app' 设置互不干扰 */
+export async function saveMedley(medley: Medley): Promise<void> {
+  await tx(STORE_SETTINGS, 'readwrite', (s) => s.put(medley));
+}
+
+export async function loadMedley(): Promise<Medley | undefined> {
+  const rec = await tx<Medley | undefined>(STORE_SETTINGS, 'readonly', (s) => s.get('current') as IDBRequest<Medley | undefined>);
+  if (!rec || !Array.isArray(rec.items) || !Array.isArray(rec.removed)) return undefined;
+  return rec;
 }
 
 export function newId(): string {

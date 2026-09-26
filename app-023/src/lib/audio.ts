@@ -21,6 +21,8 @@ export function tickSeconds(bpm: number): number {
  * 纯函数：把谱面展开为绝对时间事件序列（音频与视觉共用同一时间源）。
  * fromTick/toTick 为全曲绝对格区间（含头不含尾），startTime 为 t0。
  * 散板（freeMeter）：按等格时长 × stretch 近似播放（UI 明确标注为近似）。
+ * 小节自带 bpm（排台合成）：该小节按自己的速度，时刻 = 前缀小节时长和 + 小节内偏移 × 每格秒数；
+ * 无小节级 bpm 时走「绝对格 × 固定秒/格」原路径（逐比特不变，无累积漂移）。
  */
 export function computeEvents(
   bars: Bar[],
@@ -34,19 +36,32 @@ export function computeEvents(
 ): ScheduleEvent[] {
   const instMap = new Map(instruments.map((i) => [i.id, i]));
   const per = tickSeconds(bpm) * (freeMeter ? stretch : 1);
+  const mixed = bars.some((b) => b.bpm != null);
+  // 小节级速度前缀和：barStartSec[i] = 第 i 小节之前所有小节的时长和（相对 startTime）
+  const barStartSec: number[] = [];
+  if (mixed) {
+    let acc = 0;
+    for (const b of bars) {
+      barStartSec.push(acc);
+      acc += barTicks(b.beatsPerBar) * tickSeconds(b.bpm ?? bpm) * (freeMeter ? stretch : 1);
+    }
+  }
   const events: ScheduleEvent[] = [];
   let barStart = 0; // 全曲绝对格
+  let barIdx = 0;
   for (const bar of bars) {
+    const barPer = mixed ? tickSeconds(bar.bpm ?? bpm) * (freeMeter ? stretch : 1) : per;
     const offs = stepOffsets(bar);
     bar.steps.forEach((step, si) => {
       const absOff = barStart + offs[si];
       if (absOff < fromTick || absOff >= toTick) return;
       if (step.rest || step.hits.length === 0) return;
+      const time = mixed ? startTime + barStartSec[barIdx] + offs[si] * barPer : startTime + absOff * per;
       for (const hit of step.hits) {
         const inst = instMap.get(hit.instrumentId);
         if (!inst) continue;
         events.push({
-          time: startTime + absOff * per,
+          time,
           barIndex: bar.index,
           offset: offs[si],
           instrumentId: hit.instrumentId,
@@ -57,8 +72,22 @@ export function computeEvents(
       }
     });
     barStart += barTicks(bar.beatsPerBar);
+    barIdx += 1;
   }
   return events.sort((a, b) => a.time - b.time);
+}
+
+/** 区间实际时长（秒）：逐小节按各自 bpm（缺省用 defaultBpm）求和，支持区间切在小节中间 */
+export function barsDurationSeconds(bars: Bar[], defaultBpm: number, fromTick: number, toTick: number): number {
+  let acc = 0;
+  let start = 0;
+  for (const b of bars) {
+    const end = start + barTicks(b.beatsPerBar);
+    const overlap = Math.max(0, Math.min(end, toTick) - Math.max(start, fromTick));
+    if (overlap > 0) acc += overlap * tickSeconds(b.bpm ?? defaultBpm);
+    start = end;
+  }
+  return acc;
 }
 
 /** 循环区间事件：把 [fromTick,toTick) 的段落重复 loopCount 遍 */

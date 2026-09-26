@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ScheduleEvent, Score } from '../types';
 import { barTicks, totalTicks } from '../lib/grid';
-import { playRange, tickSeconds, type SchedulerHandle } from '../lib/audio';
+import { playRange, barsDurationSeconds, type SchedulerHandle } from '../lib/audio';
 
 export interface SoloMute {
   solo: Set<string>;
@@ -81,7 +81,7 @@ export function useAudio(score: Score) {
           const handle = playRange(ctx, master, s, fromTick, toTick, 1, visual);
           handleRef.current = handle;
           setPlaying(true);
-          const durS = (toTick - fromTick) * tickSeconds(s.bpm) + 0.25;
+          const durS = barsDurationSeconds(s.bars, s.bpm, fromTick, toTick) + 0.25;
           window.setTimeout(() => {
             if (handleRef.current === handle) {
               if (loop) {

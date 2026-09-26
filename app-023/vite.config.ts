@@ -7,7 +7,7 @@ export default defineConfig({
   build: { outDir: 'dist', assetsInlineLimit: 4096 },
   test: {
     environment: 'jsdom',
-    include: ['tests/**/*.test.ts'],
+    include: ['tests/**/*.test.{ts,tsx}'],
     globals: false,
   },
 });
